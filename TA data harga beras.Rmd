@@ -1,0 +1,362 @@
+---
+title: "Data Padi"
+author: "Ficilia Tiara Monika"
+date: "2024-06-03"
+output:
+  word_document: default
+  html_document: default
+---
+LIBRARY
+```{r}
+library(readxl)
+library(TSA)
+library(forecast)
+library(tseries)
+library(lmtest)
+library(csvread)
+library(ggplot2)
+library(psych)
+library(ggfortify)
+library(CircStats)
+library(MLmetrics)
+library(tidyverse)
+```
+INPUT DATA
+```{r}
+Data_Total <- read_excel("D:/Pictures/TA/Rekap Data Padi.xlsx", 
+                         sheet = "fix")
+ts.Data_total <- ts(Data_Total$Harga)
+```
+STATISTIK
+```{r}
+summary(Data_Total$Harga)
+describe(Data_Total$Harga)
+```
+PLOT DATA
+```{r}
+ggplot(data=Data_Total, aes(x=as.Date(Tanggal), y=Harga))+geom_line(color='#B2182B', lwd=0.6)+geom_point(color='#B2182B')+
+  labs(x="Tanggal", y="Harga", title="Data Harga Beras Medium Harian di Indonesia(Rp)",
+       caption="Sumber: Badan Pangan Nasional Indonesia") + scale_x_date(date_labels = "%Y-%m-%d")
+```
+PEMBAGIAN DATA TRAINING DAN TESTING
+```{r}
+data_train <-head(ts.Data_total, round(length(ts.Data_total) * 0.9))
+h <- length(ts.Data_total) - length(data_train)
+data_test <- tail(ts.Data_total, h)
+```
+PEMODELAN DERET WAKTU TANPA FAKTOR INTERVENSI DAN PENCILAN
+```{r}
+#Uji kestasioneran
+adf.test(data_train)
+acf(data_train, main="Grafik ACF")
+
+#Diff ke-1
+data_train_diff <- diff(data_train)
+
+#Plot data diff ke-1
+data_train_ggplot = Data_Total[2:136, ]
+plot_diff <- data.frame(Tanggal = data_train_ggplot$Tanggal, Diff=data_train_diff)
+ggplot(data=plot_diff, aes(x=as.Date(Tanggal), y=Diff))+geom_line(color='#B2182B', lwd=0.6)+geom_point(color='#B2182B')+
+  labs(x="Tanggal", y="Diferensiasi", title="Hasil Diferensiasi 1 Kali terhadap Data Training") + 
+  scale_x_date(date_labels = "%b")
+
+#Uji kestasioneran hasil diff ke-1
+adf.test(data_train_diff)
+acf(data_train_diff, main ="Grafik ACF diff")
+pacf(data_train_diff, main ="Grafik PACF diff")
+
+#Identifikasi model dan estimasi parameter
+Model_1 = arima(data_train, order = c(1,1,1)) #1523.9
+summary(Model_1)
+Model_otomatis = auto.arima(data_train) #1523.54
+summary(Model_otomatis)
+Model_2 = arima(data_train, order=c(1,1,0)) #1523.9
+summary(Model_2)
+
+#Uji signifikansi parameter
+coeftest(Model_otomatis)
+
+#Uji diagnostik
+checkresiduals(Model_otomatis)
+ks.test(rstandard(Model_otomatis), 
+        pnorm(length(residuals(Model_otomatis)), mean=0, sd=1))
+
+#Plot fitting
+data_train_ggplot <- head(Data_Total, n=136)
+fitted_values = fitted(Model_otomatis)
+plot_data <- data.frame(Tanggal = data_train_ggplot$Tanggal, Train= data_train_ggplot$Harga,
+                        Fitted = fitted_values)
+ggplot(plot_data, aes(x=as.Date(Tanggal)))+
+  geom_line(aes(y= Train, color='Train'), linetype = "solid")+
+  geom_point(aes(y=Train, color='Train'))+
+  geom_line(aes(y=Fitted, color='Fitted'),  linetype="dashed")+
+  geom_point(aes(y=Fitted, color='Fitted'))+
+  scale_color_manual(values = c(Train = "red", Fitted = "blue"),
+                     name = "Keterangan",
+                     labels = c(Train = "Data Train", Fitted = "Fitted Values"))+
+  scale_x_date(date_labels = "%Y-%m-%d")+
+  labs(x="Tanggal", y="Harga", title="Perbandingan Data Train vs Data Fitting")
+
+#Forecasting
+predicted <- forecast(fitted(Model_otomatis), h = h, level=c(80,95))
+plot(predicted, main="Forecasting Model ARIMA(0,1,1)", ylab= "Harga", col='blue',
+     lwd=1.5)
+points(fitted_values, col='blue',pch=16, cex=0.5)
+points(ts.Data_total, col ='red', pch=16, cex=0.5)
+lines(ts.Data_total, col='red', lwd=1.5, lty=2)
+legend("topleft", legend = c('Harga beras', 'Fitted values'),
+       lty=c(2,1), cex= 0.8,col=c('red','blue'), pch= c(19,19), lwd=2)
+
+#Perhitungan MAPE
+MAPE(predicted$mean, data_test)
+```
+PEMODELAN DERET WAKTU DENGAN FAKTOR INTERVENSI
+```{r}
+#Identifikasi intervensi
+ggplot(data=Data_Total, aes(x=as.Date(Tanggal), y=Harga))+geom_line(color='#B2182B', lwd=0.6)+ 
+  geom_point(color='#B2182B')+
+  geom_vline(xintercept = as.Date("2024-04-10"), linetype = "dashed", color = "slateblue") +
+  labs(x="Tanggal", y="Harga", title="Data Harga Beras Medium Harian di Indonesia(Rp)",
+       caption="Sumber: Badan Pangan Nasional Indonesia") + scale_x_date(date_labels = "%Y-%m-%d")
+
+#Definisikan data pre-intervensi
+data_preintervensi <- ts(data_train, start=c(1), end=c(131))
+plot_preint <- head(Data_Total, n=131)
+ggplot(data=plot_preint, aes(x=as.Date(Tanggal), y=Harga))+geom_line(color='#B2182B', lwd=0.6)+geom_point(color='#B2182B')+
+  labs(x="Tanggal", y="Harga", title="Data Pre-Intervensi Harga Beras Medium Harian di Indonesia(Rp)",
+       caption="Sumber: Badan Pangan Nasional Indonesia") + scale_x_date(date_labels = "%Y-%m-%d")
+
+#Uji kestasioneran data pre-intervensi
+adf.test(data_preintervensi)
+acf(data_preintervensi)
+pacf(data_preintervensi)
+
+#Diff ke-1 data pre-intervensi
+data_pre_diff <- diff(data_preintervensi)
+adf.test(data_pre_diff)
+
+#Plot diff ke-1 preintervensi
+data_preint_ggplot = Data_Total[2:131, ]
+plot_preint_diff <- data.frame(Tanggal = data_preint_ggplot$Tanggal, Diff=data_pre_diff)
+ggplot(data=plot_preint_diff, aes(x=as.Date(Tanggal), y=Diff))+geom_line(color='#B2182B', lwd=0.6)+geom_point(color='#B2182B')+
+  labs(x="Tanggal", y="Diferensiasi", title="Hasil Diferensiasi 1 Kali terhadap Data Pre-Intervensi") + 
+  scale_x_date(date_labels = "%b")
+
+#Diff ke-2 data pre-intervensi
+data_pre_diff2 <- diff(data_pre_diff)
+adf.test(data_pre_diff2)
+acf(data_pre_diff2, main="Grafik ACF")
+pacf(data_pre_diff2, main="Grafik PACF")
+
+#Plot diff ke-2 preintervensi
+data_preint_ggplot2 = Data_Total[3:131, ]
+plot_preint_diff2 <- data.frame(Tanggal = data_preint_ggplot2$Tanggal, Diff=data_pre_diff2)
+ggplot(data=plot_preint_diff2, aes(x=as.Date(Tanggal), y=Diff))+geom_line(color='#B2182B', lwd=0.6)+geom_point(color='#B2182B')+
+  labs(x="Tanggal", y="Diferensiasi", title="Hasil Diferensiasi Kedua terhadap Data Pre-Intervensi") + 
+  scale_x_date(date_labels = "%b")
+
+#Estimasi parameter model pre-intervensi
+model_1 = arima(data_preintervensi, order=c(7,2,2)) #1304.07
+summary(model_1)
+model_2 = arima(data_preintervensi, order=c(6,2,2)) #1302.26
+summary(model_2)
+model_3 = arima(data_preintervensi, order=c(4,2,2)) #1308.87
+summary(model_3)
+model_4 = auto.arima(data_preintervensi) 
+summary(model_4) #1302.99 #ARIMA(0,2,2)
+model_5 = arima(data_preintervensi, order=c(3,2,2)) #1304.17
+summary(model_5)
+model_6 = arima(data_preintervensi, order=c(2,2,2)) #1306.32
+summary(model_6)
+model_7 = arima(data_preintervensi, order=c(1,2,2)) #1302.99
+summary(model_7)
+
+#Uji diagnostik model pre-intervensi
+checkresiduals(model_2)
+ks.test(rstandard(model_2), 
+        pnorm(length(residuals(model_2)), mean=0, sd=1))
+
+#Definisikan variabel intervensi
+Intervensi_lebaran = data.frame(I162=1*(seq(data_train)==132))
+
+#Estimasi parameter model intervensi
+model_intervensi = arimax(data_train, order=c(6,2,2),
+                          xtransf=Intervensi_lebaran, transfer=list(c(0,1)),
+                          method ='ML')
+summary(model_intervensi)
+coeftest(model_intervensi)
+
+#Estimasi ulang variabel intervensi
+model_intervensi2 = arimax(data_train, order=c(6,2,1),
+                          xtransf=Intervensi_lebaran, transfer=list(c(0,1)),
+                          method ='ML')
+summary(model_intervensi2)
+coeftest(model_intervensi2)
+
+#Uji diagnostik model dengan faktor intervensi
+checkresiduals(model_intervensi2)
+ks.test(rstandard(model_intervensi2), 
+        pnorm(length(residuals(model_intervensi2)), mean=0, sd=1))
+
+#Tinjau efek intervensi
+Intervensi_ts <- ts(Intervensi_lebaran)
+result <- Intervensi_ts*194.019503 + stats::lag(Intervensi_ts)*522.772066
+tanggal_train <- Data_Total[2:136,]
+plot_efek <- data.frame(Tanggal = tanggal_train$Tanggal, Efek=result)
+ggplot(plot_efek, aes(x = Tanggal, y = Intervensi_ts...194.019503)) +
+  geom_segment(aes(xend = Tanggal, yend = 0)) +
+  labs(x = "Tanggal", y = "Efek") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))+
+  labs(y="Efek Intervensi",title="Efek Intervensi Hari Raya Idul Fitri")
+
+#Plot fitting model intervensi
+fitted_values_intervensi = fitted(model_intervensi2)
+plot_data_intervensi <- data.frame(Tanggal = data_train_ggplot$Tanggal, Train= data_train_ggplot$Harga,
+                        Fitted = fitted_values_intervensi)
+ggplot(plot_data_intervensi, aes(x=as.Date(Tanggal)))+
+  geom_line(aes(y= Train, color='Train'), linetype = "solid")+
+  geom_point(aes(y=Train, color='Train'))+
+  geom_line(aes(y=Fitted, color='Fitted'),  linetype="dashed")+
+  geom_point(aes(y=Fitted, color='Fitted'))+
+  scale_color_manual(values = c(Train = "red", Fitted = "blue"),
+                     name = "Keterangan",
+                     labels = c(Train = "Data Train", Fitted = "Fitted Values"))+
+  scale_x_date(date_labels = "%Y-%m-%d")+
+  labs(x="Tanggal", y="Harga", title="Perbandingan Data Train vs Data Fitting")
+
+#Forecasting model intervensi
+predicted_intervensi <- forecast(fitted_values_intervensi, h = h, level=c(80,95))
+plot(predicted_intervensi, main="Forecasting Model ARIMA(6,2,1) dengan Faktor Intervensi", ylab= "Harga", col='blue',
+     lwd=1.5)
+points(fitted_values_intervensi, col='blue',pch=16, cex=0.5)
+points(ts.Data_total, col ='red', pch=16, cex=0.5)
+lines(ts.Data_total, col='red', lwd=1.5, lty=2)
+legend("topleft", legend = c('Harga beras', 'Fitted values'),
+       lty=c(2,1), cex= 0.8,col=c('red','blue'), pch= c(19,19), lwd=2)
+
+#Perhitungan MAPE
+MAPE(predicted_intervensi$mean, data_test)
+```
+PEMODELAN DERET WAKTU DENGAN FAKTOR PENCILAN
+```{r}
+#Deteksi pencilan
+detectAO(Model_otomatis)
+detectIO(Model_otomatis)
+
+#Estimasi parameter model pencilan
+model_outlier <- arimax(data_train, order=c(0,1,1), 
+                         xreg=data.frame(ao132=1*(seq(data_train)==132), ao134=1*seq(data_train)==134), 
+                         io=c(133))
+summary(model_outlier)
+coeftest(model_outlier)
+
+#Uji diagnostik
+checkresiduals(model_outlier)
+ks.test(rstandard(model_outlier), 
+        pnorm(length(residuals(model_outlier)), mean=0, sd=1))
+
+#Tinjau efek pencilan AO132
+AO_132 <- ts(data.frame(AO132=1*(seq(data_train)==132)))
+efek_AO132 <- 223.1628*AO_132
+tanggal_train <- Data_Total[1:136,]
+plot_efek <- data.frame(Tanggal = tanggal_train$Tanggal, Efek=efek_AO132)
+ggplot(plot_efek, aes(x = Tanggal, y = AO132)) +
+  geom_segment(aes(xend = Tanggal, yend = 0)) +
+  labs(x = "Tanggal", y = "Efek") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))+
+  labs(y="Efek Pencilan",title="Efek Pencilan AO pada T=132")
+
+#Tinjau efek pencilan AO134
+AO_134 <- ts(data.frame(AO134=1*(seq(data_train)==134)))
+efek_AO134 <- -187.1729*AO_134
+plot_efek134 <- data.frame(Tanggal = tanggal_train$Tanggal, Efek=efek_AO134)
+ggplot(plot_efek134, aes(x = Tanggal, y = AO134)) +
+  geom_segment(aes(xend = Tanggal, yend = 0)) +
+  labs(x = "Tanggal", y = "Efek") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))+
+  labs(y="Efek Pencilan",title="Efek Pencilan AO pada T=134")
+
+#Tinjau efek pencilan IO133
+IO_133 <- as.numeric(seq(data_train) == 133)
+efek_IO133 <- IO_133*531.8007 + lag(IO_133)*(0.3442*531.8007)
+plot_efek133 <- data.frame(Tanggal = tanggal_train$Tanggal, Efek=efek_IO133)
+ggplot(plot_efek133, aes(x = Tanggal, y = Efek)) +
+  geom_segment(aes(xend = Tanggal, yend = 0)) +
+  labs(x = "Tanggal", y = "Efek") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))+
+  labs(y="Efek Pencilan",title="Efek Pencilan IO pada T=133")
+
+#Plot fitting
+fitted_values_outlier = fitted(model_outlier)
+plot_data_outlier <- data.frame(Tanggal = data_train_ggplot$Tanggal, Train= data_train_ggplot$Harga,
+                        Fitted = fitted_values_outlier)
+ggplot(plot_data_outlier, aes(x=as.Date(Tanggal)))+
+  geom_line(aes(y= Train, color='Train'), linetype = "solid")+
+  geom_point(aes(y=Train, color='Train'))+
+  geom_line(aes(y=Fitted, color='Fitted'),  linetype="dashed")+
+  geom_point(aes(y=Fitted, color='Fitted'))+
+  scale_color_manual(values = c(Train = "red", Fitted = "blue"),
+                     name = "Keterangan",
+                     labels = c(Train = "Data Train", Fitted = "Fitted Values"))+
+  scale_x_date(date_labels = "%Y-%m-%d")+
+  labs(x="Tanggal", y="Harga", title="Perbandingan Data Train vs Data Fitting")
+
+#Forecasting model outlier
+predicted_outlier <- forecast(fitted(model_outlier), h = h)
+plot(predicted_outlier, main="Forecasting Model ARIMA(0,1,1) dengan Faktor Pencilan", 
+     ylab= "Harga", col='blue', lwd= 1.5, lty=2)
+points(ts.Data_total, cex = .5, col ='red', pch = 16)
+lines(ts.Data_total, col='red', lwd=1.5, lty=1)
+legend("topleft", legend = c('Harga', 'Fitted values harga'),
+       cex=0.8, lty=c(1,2), col=c('red','blue'), pch= c(16,16))
+
+#Perhitungan MAPE
+MAPE(predicted_outlier$mean, data_test)
+```
+PEMODELAN DERET WAKTU DENGAN FAKTOR INTERVENSI DAN PENCILAN
+```{r}
+#Estimasi parameter
+model_gabungan = arimax(data_train, order=c(6,2,2),
+                          xtransf=Intervensi_lebaran, transfer=list(c(0,1)),
+                          xreg=data.frame(ao132=1*(seq(data_train)==132), 
+                                          ao134=1*seq(data_train)==134), 
+                          io=c(133),
+                          method ='ML')
+summary(model_gabungan)
+
+#Uji signifikansi parameter
+coeftest(model_gabungan)
+
+#Uji diagnostik
+checkresiduals(model_gabungan)
+ks.test(rstandard(model_gabungan), 
+        pnorm(length(residuals(model_gabungan)), mean=0, sd=1))
+
+#Plot fitting model gabungan
+fitted_values_gabungan = fitted(model_gabungan)
+plot_data_gabungan <- data.frame(Tanggal = data_train_ggplot$Tanggal, Train= data_train_ggplot$Harga,
+                        Fitted = fitted_values)
+ggplot(plot_data_gabungan, aes(x=as.Date(Tanggal)))+
+  geom_line(aes(y= Train, color='Train'), linetype = "solid")+
+  geom_point(aes(y=Train, color='Train'))+
+  geom_line(aes(y=Fitted, color='Fitted'),  linetype="dashed")+
+  geom_point(aes(y=Fitted, color='Fitted'))+
+  scale_color_manual(values = c(Train = "red", Fitted = "blue"),
+                     name = "Keterangan",
+                     labels = c(Train = "Data Train", Fitted = "Fitted Values"))+
+  scale_x_date(date_labels = "%Y-%m-%d")+
+  labs(x="Tanggal", y="Harga", title="Perbandingan Data Train vs Data Fitting")
+
+#Forecasting model gabungan
+predicted_gabungan <- forecast(fitted_values_gabungan, h = h, level=c(80,95))
+plot(predicted_gabungan, main="Forecasting Model ARIMA(6,2,1) dengan Faktor Intervensi dan Pencilan", ylab= "Harga", col='blue',
+     lwd=1.5)
+points(fitted_values_gabungan, col='blue',pch=16, cex=0.5)
+points(ts.Data_total, col ='red', pch=16, cex=0.5)
+lines(ts.Data_total, col='red', lwd=1.5, lty=2)
+legend("topleft", legend = c('Harga beras', 'Fitted values'),
+       lty=c(2,1), cex= 0.8,col=c('red','blue'), pch= c(19,19), lwd=2)
+
+#Perhitungan MAPE
+MAPE(predicted_gabungan$mean, data_test)
+```
