@@ -1,0 +1,307 @@
+---
+title: "Data kriminalitas"
+author: "Ficilia Tiara Monika"
+date: "2024-06-03"
+output:
+  word_document: default
+  html_document: default
+---
+LIBRARY
+```{r}
+library(readxl)
+library(TSA)
+library(forecast)
+library(tseries)
+library(lmtest)
+library(csvread)
+library(ggplot2)
+library(psych)
+library(ggfortify)
+library(CircStats)
+library(MLmetrics)
+library(tidyverse)
+```
+INPUT DATA
+```{r}
+Data_Total <- read_excel("D:/Pictures/TA/Data Kriminalitas Bandung.xlsx", sheet="Rekap total JTP")
+ts.Data_total <- ts(Data_Total$Jumlah)
+```
+STATISTIK
+```{r}
+summary(Data_Total$Jumlah)
+describe(Data_Total$Jumlah)
+```
+PLOT DATA
+```{r}
+ggplot(data=Data_Total, aes(x=as.Date(Tanggal), y=Jumlah))+geom_line(color='#B2182B', lwd=0.6)+geom_point(color='#B2182B')+
+  labs(x="Tanggal", y="Jumlah JTP", title="Jumlah Tindak Pidana di Kota Bandung",
+       caption="Sumber: Sat Reskrim Polrestabes Bandung ") + 
+  scale_x_date(date_labels = "%Y-%m-%d")
+```
+PEMBAGIAN DATA TRAINING DAN TESTING
+```{r}
+data_train <-head(ts.Data_total, round(length(ts.Data_total) * 0.9))
+h <- length(ts.Data_total) - length(data_train)
+data_test <- tail(ts.Data_total, h)
+```
+PEMODELAN DERET WAKTU TANPA FAKTOR INTERVENSI DAN PENCILAN
+```{r}
+#Uji kestasioneran
+adf.test(data_train)
+
+#Diff ke-1
+data_train_diff <- diff(data_train)
+plot(data_train_diff, main="Data JTP Mingguan Bandung (diff)",
+     xlab="Mingguan",ylab="Jumlah JTP",type ='o')
+
+#Plot diff ke-1
+data_preint_ggplot = Data_Total[2:140, ]
+plot_preint_diff <- data.frame(Tanggal = data_preint_ggplot$Tanggal, Diff=data_train_diff)
+ggplot(data=plot_preint_diff, aes(x=as.Date(Tanggal), y=Diff))+geom_line(color='#B2182B', lwd=0.6)+geom_point(color='#B2182B')+
+  labs(x="Tanggal", y="Diferensiasi", title="Hasil Diferensiasi 1 Kali terhadap Data Training") + 
+  scale_x_date(date_labels = "%b")
+
+#Uji kestasioneran diferensiasi
+adf.test(data_train_diff)
+
+#Identifikasi model dan estimasi parameter
+acf(data_train_diff, main ="Grafik ACF diff")
+pacf(data_train_diff, main ="Grafik PACF diff")
+Model_1 = arima(data_train, order = c(1,1,1))
+summary(Model_1)
+Model_2 = arima(data_train, order = c(2,1,1))
+summary(Model_2)
+Model_3 = arima(data_train, order = c(3,1,1))
+summary(Model_3)
+Model_4 = arima(data_train, order = c(4,1,1))
+summary(Model_4)
+Model_5 = arima(data_train, order = c(1,1,2))
+summary(Model_5)
+Model_6 = arima(data_train, order = c(2,1,2))
+summary(Model_6)
+Model_7 = arima(data_train, order = c(3,1,2))
+summary(Model_7)
+Model_8 = arima(data_train, order = c(4,1,2))
+summary(Model_8)
+Model_otomatis = auto.arima(data_train)
+summary(Model_otomatis) #1135.4 ARIMA(0,1,2)
+
+#Uji signifikansi parameter
+coeftest(Model_otomatis)
+
+#Uji diagnostik
+checkresiduals(Model_otomatis)
+ks.test(rstandard(Model_otomatis), 
+        pnorm(length(residuals(Model_otomatis)), mean=0, sd=1))
+
+#Plot hasil fitting
+data_train_ggplot <- head(Data_Total, n=140)
+fitted_values = fitted(Model_otomatis)
+plot_data <- data.frame(Tanggal = data_train_ggplot$Tanggal, Train= data_train_ggplot$Jumlah,
+                        Fitted = fitted_values)
+ggplot(plot_data, aes(x=as.Date(Tanggal)))+
+  geom_line(aes(y= Train, color='Train'), linetype = "solid")+
+  geom_point(aes(y=Train, color='Train'))+
+  geom_line(aes(y=Fitted, color='Fitted'),  linetype="dashed")+
+  geom_point(aes(y=Fitted, color='Fitted'))+
+  scale_color_manual(values = c(Train = "red", Fitted = "blue"),
+                     name = "Keterangan",
+                     labels = c(Train = "Data Train", Fitted = "Fitted Values"))+
+  scale_x_date(date_labels = "%Y-%m-%d")+
+  labs(x="Tanggal", y="Jumlah JTP", title="Perbandingan Data Train vs Data Fitting")
+
+#Forecasting
+predicted <- forecast(fitted(Model_otomatis), h = h)
+plot(predicted, main="Forecasting Model ARIMA(0,1,2)", 
+     ylab= "Jumlah JTP", col='blue', lwd= 1.5, lty=2, ylim = c(25,125))
+points(ts.Data_total, cex = .5, col ='red', pch = 16)
+lines(ts.Data_total, col='red', lwd=1.5, lty=1)
+legend("topright", legend = c('Harga', 'Fitted values harga'),
+       cex=0.8, lty=c(1,2), col=c('red','blue'), pch= c(16,16))
+
+#Perhitungan MAPE
+MAPE(predicted$mean, data_test)
+```
+PEMODELAN DERET WAKTU DENGAN FAKTOR INTERVENSI
+```{r}
+#Identifikasi intervensi
+ggplot(data=Data_Total, aes(x=as.Date(Tanggal), y=Jumlah))+geom_line(color='#B2182B', lwd=0.6)+ 
+  geom_point(color='#B2182B')+
+  geom_vline(xintercept = as.Date("2020-04-21"), linetype = "dashed", color = "slateblue") +
+  labs(x="Tanggal", y="Harga", title="Data Jumlah Tindak Pidana di Kota Bandung",
+       caption="Sumber: Sat Reskrim Polrestabes Bandung dan Jajaran") + scale_x_date(date_labels = "%Y-%m-%d")
+
+#Definisikan data pre-intervensi
+data_preintervensi <- ts(data_train, start=c(1), end=c(68))
+plot_preint <- head(Data_Total, n=68)
+ggplot(data=plot_preint, aes(x=as.Date(Tanggal), y=Jumlah))+geom_line(color='#B2182B', lwd=0.6)+geom_point(color='#B2182B')+
+  labs(x="Tanggal", y="Jumlah Tindak Pidana", title="Data Pre-Intervensi Jumlah Tindak Pidana di Kota Bandung",
+       caption="Sumber: Sat Reskrim Polrestabes Bandung dan Jajaran") + scale_x_date(date_labels = "%Y-%m-%d")
+
+#Uji kestasioneran data pre-intervensi
+adf.test(data_preintervensi) #sudah stasioner
+
+#Identifikasi dan estimasi parameter model pre-intervensi
+acf(data_preintervensi, main="Grafik ACF Pre-intervensi")
+pacf(data_preintervensi, main="Grafik PACF Pre-intervensi")
+model_1 = arima(data_preintervensi, order=c(0,0,3))
+summary(model_1)
+model_2 = arima(data_preintervensi, order=c(0,0,2))
+summary(model_2)
+model_otomatis =auto.arima(data_preintervensi)
+summary(model_otomatis)
+
+#Uji diagnostik model pre-intervensi
+checkresiduals(model_1)
+ks.test(rstandard(model_1), 
+        pnorm(length(residuals(model_1)), mean=0, sd=1))
+
+#Definisi variabel intervensi
+Intervensi_69 <- data.frame(I_69 = 1 * (seq_along(data_train) >= 69), 
+                            I_69 = 1 * (seq_along(data_train) >= 69))
+
+#Estimasi parameter model dengan faktor intervensi
+model_intervensi = arimax(data_train, order=c(0,0,3),
+                  xtransf=Intervensi_69, transfer=list(c(1,0)),
+                  method ='ML')
+summary(model_intervensi)
+coeftest(model_intervensi)
+
+#Estimasi ulang parameter model dengan faktor intervensi
+model_intervensi2 = arimax(data_train, order=c(0,0,1),
+                           xtransf=Intervensi_69, transfer=list(c(1,0)),
+                           method ='ML')
+summary(model_intervensi2)
+coeftest(model_intervensi2)
+
+#Uji diagnostik
+checkresiduals(model_intervensi2)
+ks.test(rstandard(model_intervensi2), 
+        pnorm(length(residuals(model_intervensi2)), mean=0, sd=1))
+
+#Tinjau efek intervensi
+Intervensi_PSBB <- data.frame(I_69 = 1 * (seq_along(data_train) == 69))
+Efek_intervensi <- stats::filter(Intervensi_PSBB$I_69, filter = 0.866150, 
+                                 method = 'recursive', sides = 1) * 25.535715
+tanggal_train <- Data_Total[1:140,]
+plot_efek <- data.frame(Tanggal = tanggal_train$Tanggal, Efek=Efek_intervensi)
+ggplot(plot_efek, aes(x = Tanggal, y = Efek)) +
+  geom_segment(aes(xend = Tanggal, yend = 0)) +
+  labs(x = "Tanggal", y = "Efek") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))+
+  labs(y="Efek Intervensi",title="Efek Intervensi PSBB Kota Bandung")
+
+#Plot hasil fitting
+data_train_ggplot <- head(Data_Total, n=140)
+fitted_values_intervensi = fitted(model_intervensi2)
+plot_data_intervensi <- data.frame(Tanggal = data_train_ggplot$Tanggal, Train= data_train_ggplot$Jumlah,
+                        Fitted = fitted_values_intervensi)
+ggplot(plot_data_intervensi, aes(x=as.Date(Tanggal)))+
+  geom_line(aes(y= Train, color='Train'), linetype = "solid")+
+  geom_point(aes(y=Train, color='Train'))+
+  geom_line(aes(y=Fitted, color='Fitted'),  linetype="dashed")+
+  geom_point(aes(y=Fitted, color='Fitted'))+
+  scale_color_manual(values = c(Train = "red", Fitted = "blue"),
+                     name = "Keterangan",
+                     labels = c(Train = "Data Train", Fitted = "Fitted Values"))+
+  scale_x_date(date_labels = "%Y-%m-%d")+
+  labs(x="Tanggal", y="Jumlah JTP", title="Perbandingan Data Train vs Data Fitting")
+
+#Forecasting
+predicted_intervensi <- forecast(fitted(model_intervensi2), h = h)
+plot(predicted_intervensi, main="Forecasting Model ARIMA(0,0,3) dengan Faktor Intervensi", ylab= "Jumlah JTP", col='blue',
+    ylim=c(30,125), lwd=1.5, lty=2)
+points(fitted_values_intervensi, col='blue',pch=16, cex=0.5)
+points(ts.Data_total, col ='red', pch=16, cex=0.5)
+lines(ts.Data_total, col='red', lwd=1.5)
+legend("topright", legend = c('Jumlah JTP Mingguan Kota Bandung', 'Fitted values'),
+       lty=c(1,2), cex= 0.8,col=c('red','blue'), pch= c(19,19), lwd=2)
+
+#Perhitungan MAPE
+MAPE(predicted_intervensi$mean, data_test)
+```
+PEMODELAN DERET WAKTU DENGAN FAKTOR PENCILAN
+```{r}
+#Pendeteksian pencilan
+detectAO(Model_otomatis)
+detectIO(Model_otomatis)
+
+#Estimasi parameter model outlier
+model_outlier <- arimax(data_train, order=c(0,1,2), io=c(6))
+summary(model_outlier)
+
+#Uji Signifikansi koefisien
+coeftest(model_outlier)
+
+#Uji residual
+checkresiduals(model_outlier)
+ks.test(rstandard(model_outlier), 
+        pnorm(length(residuals(model_outlier)), mean=0, sd=1))
+
+#Plot fitting
+fitted_values_outlier = fitted(model_outlier)
+plot_data_outlier <- data.frame(Tanggal = data_train_ggplot$Tanggal, Train= data_train_ggplot$Jumlah,
+                        Fitted = fitted_values_outlier)
+ggplot(plot_data_outlier, aes(x=as.Date(Tanggal)))+
+  geom_line(aes(y= Train, color='Train'), linetype = "solid")+
+  geom_point(aes(y=Train, color='Train'))+
+  geom_line(aes(y=Fitted, color='Fitted'),  linetype="dashed")+
+  geom_point(aes(y=Fitted, color='Fitted'))+
+  scale_color_manual(values = c(Train = "red", Fitted = "blue"),
+                     name = "Keterangan",
+                     labels = c(Train = "Data Train", Fitted = "Fitted Values"))+
+  scale_x_date(date_labels = "%Y-%m-%d")+
+  labs(x="Tanggal", y="Jumlah JTP", title="Perbandingan Data Train vs Data Fitting")
+
+#Forecast
+predicted_outlier <- forecast(fitted(model_outlier), h = h)
+plot(predicted_outlier, main="Forecasting Model ARIMA(0,1,2) dengan Faktor Pencilan", 
+     ylab= "Jumlah JTP", col='blue', lwd= 1.5, lty=2)
+points(ts.Data_total, cex = .5, col ='red', pch = 16)
+lines(ts.Data_total, col='red', lwd=1.5, lty=1)
+legend("topright", legend = c('Jumlah JTP Mingguan Kota Bandung', 'Fitted values'),
+       cex=0.8, lty=c(1,2), col=c('red','blue'), pch= c(16,16))
+
+#Perhitungan MAPE
+MAPE(predicted_outlier$mean, data_test)
+```
+PEMODELAN GABUNGAN DENGAN FAKTOR INTERVENSI DAN PENCILAN
+```{r}
+#Estimasi parameter model gabungan
+model_gabungan <- arimax(data_train, order=c(0,1,2), io=c(6), xtransf=Intervensi_69,
+                         transfer=list(c(1,0)),method='ML')
+summary(model_gabungan)
+coeftest(model_gabungan)
+
+#Uji residual
+checkresiduals(model_gabungan)
+ks.test(rstandard(model_gabungan), 
+        pnorm(length(residuals(model_gabungan)), mean=0, sd=1))
+
+#Plot fitting
+fitted_values_gabungan = fitted(model_gabungan)
+plot_data_gabungan <- data.frame(Tanggal = data_train_ggplot$Tanggal, Train= data_train_ggplot$Jumlah,
+                        Fitted = fitted_values_gabungan)
+ggplot(plot_data, aes(x=as.Date(Tanggal)))+
+  geom_line(aes(y= Train, color='Train'), linetype = "solid")+
+  geom_point(aes(y=Train, color='Train'))+
+  geom_line(aes(y=Fitted, color='Fitted'),  linetype="dashed")+
+  geom_point(aes(y=Fitted, color='Fitted'))+
+  scale_color_manual(values = c(Train = "red", Fitted = "blue"),
+                     name = "Keterangan",
+                     labels = c(Train = "Data Train", Fitted = "Fitted Values"))+
+  scale_x_date(date_labels = "%Y-%m-%d")+
+  labs(x="Tanggal", y="Jumlah JTP", title="Perbandingan Data Train vs Data Fitting")
+
+#Forecasting
+predicted_gabungan <- forecast(fitted(model_gabungan), h = h)
+plot(predicted_gabungan, main="Forecasting Model ARIMA(0,1,2) dengan Faktor Intervensi dan Pencilan", 
+     ylab= "Jumlah JTP", col='blue', lwd= 1.5, lty=2, ylim=c(30,150))
+points(ts.Data_total, cex = .5, col ='red', pch = 16)
+lines(ts.Data_total, col='red', lwd=1.5, lty=1)
+legend("topright", legend = c('Jumlah JTP Mingguan Kota Bandung', 'Fitted values'),
+       cex=0.8, lty=c(1,1), col=c('red','blue'), pch= c(16,16))
+
+MAPE(predicted_gabungan$mean, data_test)
+```
+
